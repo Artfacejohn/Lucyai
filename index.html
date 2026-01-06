@@ -3,14 +3,13 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Lucy Live Loop</title>
+<title>Lucy Live Loop — Chromebook Friendly</title>
 <style>
   html,body{height:100%;margin:0;background:#000;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial}
   .stage{position:fixed;inset:0;display:grid;place-items:center;background:#000}
-  video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
-  #idle{opacity:1;transition:opacity 120ms linear}
-  #talk{opacity:0;transition:opacity 120ms linear}
-  .ui{position:fixed;left:12px;bottom:12px;display:flex;gap:8px;align-items:center;color:#ddd}
+  video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+  [hidden]{display:none !important;}
+  .ui{position:fixed;left:12px;bottom:12px;display:flex;gap:8px;align-items:center;color:#ddd;z-index:10;flex-wrap:wrap}
   button,input[type=range]{appearance:none;border:1px solid #333;background:#111;color:#eee;padding:8px 12px;border-radius:10px}
   label{font-size:12px;opacity:.85}
   .hint{position:fixed;left:12px;top:12px;color:#bbb;font-size:12px;max-width:72ch}
@@ -18,88 +17,219 @@
 </head>
 <body>
   <div class="stage">
-    <video id="idle" src="idle.mp4" muted playsinline loop preload="auto"></video>
-    <video id="talk" src="talk.mp4" muted playsinline loop preload="auto"></video>
+    <!-- Base idle loops forever -->
+    <video id="idleBase" src="idle.mp4"     muted playsinline loop preload="auto"></video>
+
+    <!-- Specials: play once when triggered (no loop) -->
+    <video id="idleHair" src="idlehair.mp4" muted playsinline preload="auto" hidden></video>
+    <video id="idleFire" src="idlefire.mp4" muted playsinline preload="auto" hidden></video>
+
+    <!-- Talking layer -->
+    <video id="talk"     src="talk.mp4"     muted playsinline loop preload="auto" hidden style="z-index:5"></video>
   </div>
 
   <div class="hint">
-    1) Click “Capture Tab Audio” and pick the tab that plays your AI’s voice.<br>
-    2) Start audio in that tab. This page will switch between idle/talk automatically.<br>
-    Tip: Adjust sensitivity if it’s too twitchy or too sleepy.
+    Chromebook mode: files in same folder as this HTML. Click Capture. If that fails, it will try mic. If that fails, use Manual Talk.
   </div>
 
   <div class="ui">
-    <button id="capture">Capture Tab Audio</button>
+    <button id="capture">Capture (Tab → Mic fallback)</button>
     <label> Sensitivity
       <input id="sens" type="range" min="1" max="100" value="35" />
     </label>
+    <button id="manualTalk">Manual Talk (toggle)</button>
+    <span id="status" style="opacity:.8;font-size:.9rem">Idle</span>
   </div>
 
 <script>
-(async function(){
-  const idle = document.getElementById('idle');
-  const talk = document.getElementById('talk');
-  const btn  = document.getElementById('capture');
-  const sens = document.getElementById('sens');
+(() => {
+  // ---------- Elements ----------
+  const el = {
+    idle:  document.getElementById('idleBase'),
+    hair:  document.getElementById('idleHair'),
+    fire:  document.getElementById('idleFire'),
+    talk:  document.getElementById('talk'),
+    btn:   document.getElementById('capture'),
+    sens:  document.getElementById('sens'),
+    manual:document.getElementById('manualTalk'),
+    status:document.getElementById('status')
+  };
 
-  let mode = 'idle';
+  // Try autoplay (muted)
+  [el.idle, el.hair, el.fire, el.talk].forEach(v => v.play().catch(()=>{}));
+
+  // ---------- Config ----------
+  const CFG = {
+    warmup_ms: 10_000,                // wait after load before first special
+    minGapAfterAnySpecial_ms: 25_000, // avoid back-to-back specials
+    checkInterval_ms: 2_000,          // polling cadence to consider a special
+    hairCooldown_ms: () => 120_000 + randRange(-15_000,15_000), // ~2m ±15s
+    fireCooldown_ms: () => randRange(240_000,300_000),          // 4–5m
+    specialStartGuard_ms: 300         // bail back to idle if special doesn’t render quickly
+  };
+  function randRange(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
+
+  // ---------- State ----------
+  let mode = 'idle';                 // 'idle' | 'talk'
+  let currentSpecial = null;         // 'hair' | 'fire' | null
+  const startedAt = performance.now();
+  let nextHairAt = startedAt + CFG.hairCooldown_ms();
+  let nextFireAt = startedAt + CFG.fireCooldown_ms();
+  let lastSpecialEndedAt = startedAt;
+  let manualTalkOn = false;
+
+  // ---------- Helpers ----------
+  function setStatus(txt){ el.status.textContent = txt; }
+
+  function showBaseIdle() {
+    currentSpecial = null;
+    el.talk.hidden = true;
+    el.hair.hidden = true;
+    el.fire.hidden = true;
+    el.idle.hidden = false;
+    if (el.idle.paused) el.idle.play().catch(()=>{});
+    setStatus('Idle');
+  }
+
+  function playSpecialOnce(which /* 'hair' | 'fire' */) {
+    const vid = which === 'hair' ? el.hair : el.fire;
+    const other = which === 'hair' ? el.fire : el.hair;
+
+    el.idle.hidden = true;
+    el.talk.hidden = true;
+    other.hidden = true;
+
+    vid.loop = false;
+    vid.currentTime = 0;
+    vid.hidden = false;
+    currentSpecial = which;
+    setStatus(which === 'hair' ? 'Special: Hair' : 'Special: Fire');
+
+    // Black-screen guard: if no frames after a short time, abort back to idle
+    const guardTimer = setTimeout(() => {
+      if (!vid.readyState || vid.readyState < 2 /* HAVE_CURRENT_DATA */) {
+        // abort
+        vid.hidden = true;
+        currentSpecial = null;
+        showBaseIdle();
+      }
+    }, CFG.specialStartGuard_ms);
+
+    vid.onended = () => {
+      clearTimeout(guardTimer);
+      lastSpecialEndedAt = performance.now();
+      if (which === 'hair') nextHairAt = performance.now() + CFG.hairCooldown_ms();
+      else nextFireAt = performance.now() + CFG.fireCooldown_ms();
+      vid.onended = null;
+      vid.hidden = true;
+      currentSpecial = null;
+      showBaseIdle();
+    };
+
+    vid.play().catch(()=>{ /* if blocked, guard will bounce us back */ });
+  }
+
+  function canConsiderSpecial() {
+    const now = performance.now();
+    if (mode !== 'idle') return false;
+    if (now - startedAt < CFG.warmup_ms) return false;
+    if (now - lastSpecialEndedAt < CFG.minGapAfterAnySpecial_ms) return false;
+    if (currentSpecial) return false;
+    return true;
+  }
+
+  // Periodic special logic
+  setInterval(() => {
+    if (!canConsiderSpecial()) return;
+    const now = performance.now();
+    if (now >= nextHairAt) { playSpecialOnce('hair'); return; }
+    if (now >= nextFireAt) { playSpecialOnce('fire'); return; }
+  }, CFG.checkInterval_ms);
+
+  // Start in base idle
+  showBaseIdle();
+
+  // ---------- Voice activity detection (Chromebook-friendly) ----------
   let ctx, analyser, data, rafId;
   let onCount = 0, offCount = 0;
 
-  // start videos immediately (muted autoplay is allowed)
-  idle.play().catch(()=>{});
-  talk.play().catch(()=>{});
-
-  function setMode(next){
-    if(mode === next) return;
-    mode = next;
-    if(mode === 'talk'){ talk.style.opacity = 1; idle.style.opacity = 0; }
-    else { talk.style.opacity = 0; idle.style.opacity = 1; }
-  }
-
   function rms(arr){
     let sum = 0;
-    for(let i=0;i<arr.length;i++){ const v = arr[i]; sum += v*v; }
+    for (let i=0;i<arr.length;i++){ const v = arr[i]; sum += v*v; }
     return Math.sqrt(sum / arr.length);
   }
 
-  function loop(){
-    analyser.getFloatTimeDomainData(data);
-    const level = rms(data); // ~0.0..~0.5 typical
+  function setMode(next){
+    if (mode === next) return;
+    mode = next;
 
-    // Sensitivity mapping: lower slider = more sensitive
-    const slider = Number(sens.value);     // 1..100
-    const baseOn = 0.020;                  // default speech threshold
-    const baseOff = 0.012;                 // lower to add hysteresis
-    const scale = (slider/50);             // 0.02..2.0
-    const onThresh  = baseOn  * scale;
-    const offThresh = baseOff * scale;
-
-    // debounce / hysteresis
-    const TALK_ON_FRAMES  = 5;   // ~80–90ms
-    const TALK_OFF_FRAMES = 12;  // ~190–210ms
-
-    if(level > onThresh){
-      onCount++; offCount = 0;
-      if(onCount >= TALK_ON_FRAMES) setMode('talk');
-    } else if(level < offThresh){
-      offCount++; onCount = 0;
-      if(offCount >= TALK_OFF_FRAMES) setMode('idle');
+    if (mode === 'talk') {
+      if (currentSpecial) {
+        // treat as ended for spacing/cooldown purposes
+        lastSpecialEndedAt = performance.now();
+        if (currentSpecial === 'hair') nextHairAt = performance.now() + CFG.hairCooldown_ms();
+        if (currentSpecial === 'fire') nextFireAt = performance.now() + CFG.fireCooldown_ms();
+        currentSpecial = null;
+      }
+      el.hair.hidden = true; el.fire.hidden = true; el.idle.hidden = true;
+      el.talk.hidden = false;
+      if (el.talk.paused) el.talk.play().catch(()=>{});
+      setStatus('Talk');
     } else {
-      onCount = Math.max(0, onCount-1);
-      offCount = Math.max(0, offCount-1);
+      showBaseIdle();
     }
+  }
 
+  function loop(){
+    // If manual override is on, force talk mode; when off, allow normal logic
+    if (manualTalkOn) {
+      if (mode !== 'talk') setMode('talk');
+    } else if (analyser && data) {
+      analyser.getFloatTimeDomainData(data);
+      const level = rms(data);
+
+      const slider = Number(el.sens.value); // 1..100 (lower = more sensitive)
+      const baseOn = 0.020, baseOff = 0.012;
+      const scale = (slider/50);
+      const onThresh  = baseOn  * scale;
+      const offThresh = baseOff * scale;
+
+      const TALK_ON_FRAMES  = 5;   // ~80–90ms
+      const TALK_OFF_FRAMES = 12;  // ~190–210ms
+
+      if(level > onThresh){
+        onCount++; offCount = 0;
+        if(onCount >= TALK_ON_FRAMES) setMode('talk');
+      } else if(level < offThresh){
+        offCount++; onCount = 0;
+        if(offCount >= TALK_OFF_FRAMES) setMode('idle');
+      } else {
+        onCount = Math.max(0, onCount-1);
+        offCount = Math.max(0, offCount-1);
+      }
+    }
     rafId = requestAnimationFrame(loop);
   }
 
-  btn.addEventListener('click', async () => {
-    try{
-      // IMPORTANT: Chrome requires video:true for the picker to show “Chrome Tab / Share tab audio”
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-
-      // We don't need the video track; stop it to save CPU
-      stream.getVideoTracks().forEach(t => t.stop());
+  async function startCaptureChromebookFriendly(){
+    try {
+      // Try tab/screen+audio first (works if allowed)
+      let stream = null;
+      if (navigator.mediaDevices.getDisplayMedia) {
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia({ video:true, audio:true });
+          // save CPU
+          stream.getVideoTracks().forEach(t => t.stop());
+          setStatus('Listening (tab)…');
+        } catch (e) {
+          // ignore, we’ll try mic next
+        }
+      }
+      // Fallback to microphone (usually allowed locally)
+      if (!stream) {
+        stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+        setStatus('Listening (mic)…');
+      }
 
       ctx = new (window.AudioContext || window.webkitAudioContext)();
       const src = ctx.createMediaStreamSource(stream);
@@ -111,14 +241,30 @@
       if(rafId) cancelAnimationFrame(rafId);
       loop();
 
-      btn.textContent = 'Listening to tab…';
-      btn.disabled = true;
-    }catch(err){
-      alert('Could not capture tab audio. In the picker, choose "Chrome Tab", select the tab, and check "Share tab audio." Then press Share.');
-      console.error(err);
+      el.btn.textContent = 'Listening…';
+      el.btn.disabled = true;
+    } catch (e) {
+      setStatus('Capture failed — use Manual Talk');
+    }
+  }
+
+  el.btn.addEventListener('click', startCaptureChromebookFriendly);
+
+  // Manual talk toggle (for last‑resort testing)
+  el.manual.addEventListener('click', () => {
+    manualTalkOn = !manualTalkOn;
+    el.manual.textContent = manualTalkOn ? 'Manual Talk (ON)' : 'Manual Talk (toggle)';
+    if (manualTalkOn) setMode('talk'); else setMode('idle');
+  });
+
+  // Resume autoplay if tab comes back
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      [el.idle, el.hair, el.fire, el.talk].forEach(v => { if (v.paused) v.play().catch(()=>{}); });
     }
   });
 })();
 </script>
 </body>
 </html>
+
