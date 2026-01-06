@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Lucy Live Loop</title>
+<style>
+  html,body{height:100%;margin:0;background:#000;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial}
+  .stage{position:fixed;inset:0;display:grid;place-items:center;background:#000}
+  video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+  #idle{opacity:1;transition:opacity 120ms linear}
+  #talk{opacity:0;transition:opacity 120ms linear}
+  .ui{position:fixed;left:12px;bottom:12px;display:flex;gap:8px;align-items:center;color:#ddd}
+  button,input[type=range]{appearance:none;border:1px solid #333;background:#111;color:#eee;padding:8px 12px;border-radius:10px}
+  label{font-size:12px;opacity:.85}
+  .hint{position:fixed;left:12px;top:12px;color:#bbb;font-size:12px;max-width:72ch}
+</style>
+</head>
+<body>
+  <div class="stage">
+    <video id="idle" src="idle.mp4" muted playsinline loop preload="auto"></video>
+    <video id="talk" src="talk.mp4" muted playsinline loop preload="auto"></video>
+  </div>
+
+  <div class="hint">
+    1) Click “Capture Tab Audio” and pick the tab that plays your AI’s voice.<br>
+    2) Start audio in that tab. This page will switch between idle/talk automatically.<br>
+    Tip: Adjust sensitivity if it’s too twitchy or too sleepy.
+  </div>
+
+  <div class="ui">
+    <button id="capture">Capture Tab Audio</button>
+    <label> Sensitivity
+      <input id="sens" type="range" min="1" max="100" value="35" />
+    </label>
+  </div>
+
+<script>
+(async function(){
+  const idle = document.getElementById('idle');
+  const talk = document.getElementById('talk');
+  const btn  = document.getElementById('capture');
+  const sens = document.getElementById('sens');
+
+  let mode = 'idle';
+  let ctx, analyser, data, rafId;
+  let onCount = 0, offCount = 0;
+
+  // start videos immediately (muted autoplay is allowed)
+  idle.play().catch(()=>{});
+  talk.play().catch(()=>{});
+
+  function setMode(next){
+    if(mode === next) return;
+    mode = next;
+    if(mode === 'talk'){ talk.style.opacity = 1; idle.style.opacity = 0; }
+    else { talk.style.opacity = 0; idle.style.opacity = 1; }
+  }
+
+  function rms(arr){
+    let sum = 0;
+    for(let i=0;i<arr.length;i++){ const v = arr[i]; sum += v*v; }
+    return Math.sqrt(sum / arr.length);
+  }
+
+  function loop(){
+    analyser.getFloatTimeDomainData(data);
+    const level = rms(data); // ~0.0..~0.5 typical
+
+    // Sensitivity mapping: lower slider = more sensitive
+    const slider = Number(sens.value);     // 1..100
+    const baseOn = 0.020;                  // default speech threshold
+    const baseOff = 0.012;                 // lower to add hysteresis
+    const scale = (slider/50);             // 0.02..2.0
+    const onThresh  = baseOn  * scale;
+    const offThresh = baseOff * scale;
+
+    // debounce / hysteresis
+    const TALK_ON_FRAMES  = 5;   // ~80–90ms
+    const TALK_OFF_FRAMES = 12;  // ~190–210ms
+
+    if(level > onThresh){
+      onCount++; offCount = 0;
+      if(onCount >= TALK_ON_FRAMES) setMode('talk');
+    } else if(level < offThresh){
+      offCount++; onCount = 0;
+      if(offCount >= TALK_OFF_FRAMES) setMode('idle');
+    } else {
+      onCount = Math.max(0, onCount-1);
+      offCount = Math.max(0, offCount-1);
+    }
+
+    rafId = requestAnimationFrame(loop);
+  }
+
+  btn.addEventListener('click', async () => {
+    try{
+      // IMPORTANT: Chrome requires video:true for the picker to show “Chrome Tab / Share tab audio”
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+
+      // We don't need the video track; stop it to save CPU
+      stream.getVideoTracks().forEach(t => t.stop());
+
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const src = ctx.createMediaStreamSource(stream);
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      data = new Float32Array(analyser.fftSize);
+      src.connect(analyser);
+
+      if(rafId) cancelAnimationFrame(rafId);
+      loop();
+
+      btn.textContent = 'Listening to tab…';
+      btn.disabled = true;
+    }catch(err){
+      alert('Could not capture tab audio. In the picker, choose "Chrome Tab", select the tab, and check "Share tab audio." Then press Share.');
+      console.error(err);
+    }
+  });
+})();
+</script>
+</body>
+</html>
