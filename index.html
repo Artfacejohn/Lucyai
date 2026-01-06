@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Lucy Live Loop — Cooldown Specials</title>
+<title>Lucy Live Loop</title>
 <style>
   html,body{height:100%;margin:0;background:#000;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial}
   .stage{position:fixed;inset:0;display:grid;place-items:center;background:#000}
-  video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
-  [hidden]{display:none !important;}
-
-  .ui{position:fixed;left:12px;bottom:12px;display:flex;gap:8px;align-items:center;color:#ddd;z-index:10}
+  video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+  #idle{opacity:1;transition:opacity 120ms linear}
+  #talk{opacity:0;transition:opacity 120ms linear}
+  .ui{position:fixed;left:12px;bottom:12px;display:flex;gap:8px;align-items:center;color:#ddd}
   button,input[type=range]{appearance:none;border:1px solid #333;background:#111;color:#eee;padding:8px 12px;border-radius:10px}
   label{font-size:12px;opacity:.85}
   .hint{position:fixed;left:12px;top:12px;color:#bbb;font-size:12px;max-width:72ch}
@@ -18,21 +18,14 @@
 </head>
 <body>
   <div class="stage">
-    <!-- Base idle loops forever -->
-    <video id="idleBase" src="idle.mp4"       muted playsinline loop preload="auto"></video>
-
-    <!-- Specials: play ONCE when triggered (no loop) -->
-    <video id="idleHair" src="idle-hair.mp4"  muted playsinline preload="auto" hidden></video>
-    <video id="idleFire" src="idle-fire.mp4"  muted playsinline preload="auto" hidden></video>
-
-    <!-- Talking layer -->
-    <video id="talk"     src="talk.mp4"       muted playsinline loop preload="auto" hidden style="z-index:5"></video>
+    <video id="idle" src="idle.mp4" muted playsinline loop preload="auto"></video>
+    <video id="talk" src="talk.mp4" muted playsinline loop preload="auto"></video>
   </div>
 
   <div class="hint">
-    1) Click “Capture Tab Audio” and pick the tab with your AI’s voice.<br>
-    2) While quiet: <b>idle.mp4</b> plays; occasionally we show <b>idle-hair.mp4</b> (≈2m cooldown) and <b>idle-fire.mp4</b> (≈4–5m cooldown).<br>
-    3) While speaking: <b>talk.mp4</b> shows immediately. Use sensitivity if it’s too twitchy/sleepy.
+    1) Click “Capture Tab Audio” and pick the tab that plays your AI’s voice.<br>
+    2) Start audio in that tab. This page will switch between idle/talk automatically.<br>
+    Tip: Adjust sensitivity if it’s too twitchy or too sleepy.
   </div>
 
   <div class="ui">
@@ -43,162 +36,46 @@
   </div>
 
 <script>
-(() => {
-  // ---------- Elements ----------
-  const el = {
-    idle:  document.getElementById('idleBase'),
-    hair:  document.getElementById('idleHair'),
-    fire:  document.getElementById('idleFire'),
-    talk:  document.getElementById('talk'),
-    btn:   document.getElementById('capture'),
-    sens:  document.getElementById('sens'),
-  };
+(async function(){
+  const idle = document.getElementById('idle');
+  const talk = document.getElementById('talk');
+  const btn  = document.getElementById('capture');
+  const sens = document.getElementById('sens');
 
-  // Try autoplay (muted)
-  [el.idle, el.hair, el.fire, el.talk].forEach(v => v.play().catch(()=>{}));
-
-  // ---------- Config ----------
-  const CFG = {
-    warmup_ms: 10_000,                // wait this long after load before first special
-    minGapAfterAnySpecial_ms: 25_000, // avoid back-to-back specials
-    checkInterval_ms: 2_000,          // polling cadence to consider triggering a special
-
-    // Cooldowns (with slight randomization so it feels organic)
-    hairCooldown_ms: () => 120_000 + randRange(-15_000, 15_000), // ~2:00 ±15s
-    fireCooldown_ms: () => randRange(240_000, 300_000),          // 4:00–5:00
-  };
-
-  function randRange(min, max){ return Math.floor(Math.random()*(max-min+1)) + min; }
-
-  // ---------- State ----------
-  let mode = 'idle';                 // 'idle' | 'talk'
-  let currentSpecial = null;         // 'hair' | 'fire' | null
-  const startedAt = performance.now();
-
-  // Next allowed times for each special
-  let nextHairAt = startedAt + CFG.hairCooldown_ms(); // first hair after ~2m
-  let nextFireAt = startedAt + CFG.fireCooldown_ms(); // first fire after ~4–5m
-  let lastSpecialEndedAt = startedAt;                 // gate for min gap between specials
-
-  // ---------- Helpers ----------
-  function showBaseIdle() {
-    currentSpecial = null;
-    el.talk.hidden = true;
-    el.hair.hidden = true;
-    el.fire.hidden = true;
-    el.idle.hidden = false;
-    if (el.idle.paused) el.idle.play().catch(()=>{});
-  }
-
-  function playSpecialOnce(which /* 'hair' | 'fire' */) {
-    const vid = which === 'hair' ? el.hair : el.fire;
-    const other = which === 'hair' ? el.fire : el.hair;
-
-    // Hide others and prep special
-    el.idle.hidden = true;
-    el.talk.hidden = true;
-    other.hidden = true;
-
-    vid.loop = false;
-    vid.currentTime = 0;
-    vid.hidden = false;
-    currentSpecial = which;
-
-    // End handler: set cooldown, return to base idle
-    const onEnd = () => {
-      lastSpecialEndedAt = performance.now();
-
-      if (which === 'hair') {
-        nextHairAt = performance.now() + CFG.hairCooldown_ms();
-      } else {
-        nextFireAt = performance.now() + CFG.fireCooldown_ms();
-      }
-
-      vid.onended = null;
-      vid.hidden = true;
-      currentSpecial = null;
-      showBaseIdle();
-    };
-    vid.onended = onEnd;
-
-    vid.play().catch(()=>{ /* if blocked, we'll naturally fall back later */ });
-  }
-
-  function canConsiderSpecial() {
-    const now = performance.now();
-    if (mode !== 'idle') return false; // only while quiet
-    if (now - startedAt < CFG.warmup_ms) return false;
-    if (now - lastSpecialEndedAt < CFG.minGapAfterAnySpecial_ms) return false;
-    // don't interrupt a special already playing
-    if (currentSpecial) return false;
-    return true;
-  }
-
-  // Periodic check: if quiet and cooldown passed, trigger a special
-  setInterval(() => {
-    if (!canConsiderSpecial()) return;
-    const now = performance.now();
-
-    // Priority: hair first if it's ready, else fire if it's ready (or flip this if you prefer)
-    if (now >= nextHairAt) {
-      playSpecialOnce('hair');
-      return;
-    }
-    if (now >= nextFireAt) {
-      playSpecialOnce('fire');
-      return;
-    }
-    // Otherwise, keep base idle running
-  }, CFG.checkInterval_ms);
-
-  // Start in base idle
-  showBaseIdle();
-
-  // ---------- Voice activity detection ----------
+  let mode = 'idle';
   let ctx, analyser, data, rafId;
   let onCount = 0, offCount = 0;
 
-  function rms(arr){
-    let sum = 0;
-    for (let i=0;i<arr.length;i++){ const v = arr[i]; sum += v*v; }
-    return Math.sqrt(sum / arr.length);
-  }
+  // start videos immediately (muted autoplay is allowed)
+  idle.play().catch(()=>{});
+  talk.play().catch(()=>{});
 
   function setMode(next){
-    if (mode === next) return;
+    if(mode === next) return;
     mode = next;
+    if(mode === 'talk'){ talk.style.opacity = 1; idle.style.opacity = 0; }
+    else { talk.style.opacity = 0; idle.style.opacity = 1; }
+  }
 
-    if (mode === 'talk') {
-      // If a special is mid-play, treat it as ended for spacing/cooldown purposes
-      if (currentSpecial) {
-        lastSpecialEndedAt = performance.now();
-        // push out the just-interrupted special's next window as if it finished
-        if (currentSpecial === 'hair') nextHairAt = performance.now() + CFG.hairCooldown_ms();
-        if (currentSpecial === 'fire') nextFireAt = performance.now() + CFG.fireCooldown_ms();
-        currentSpecial = null;
-      }
-
-      el.hair.hidden = true; el.fire.hidden = true; el.idle.hidden = true;
-      el.talk.hidden = false;
-      if (el.talk.paused) el.talk.play().catch(()=>{});
-    } else {
-      // back to base idle; specials will be considered again after cooldowns
-      showBaseIdle();
-    }
+  function rms(arr){
+    let sum = 0;
+    for(let i=0;i<arr.length;i++){ const v = arr[i]; sum += v*v; }
+    return Math.sqrt(sum / arr.length);
   }
 
   function loop(){
     analyser.getFloatTimeDomainData(data);
     const level = rms(data); // ~0.0..~0.5 typical
 
-    // Lower slider = more sensitive
-    const slider = Number(el.sens.value); // 1..100
-    const baseOn = 0.020;
-    const baseOff = 0.012;
-    const scale = (slider/50);           // 0.02..2.0
+    // Sensitivity mapping: lower slider = more sensitive
+    const slider = Number(sens.value);     // 1..100
+    const baseOn = 0.020;                  // default speech threshold
+    const baseOff = 0.012;                 // lower to add hysteresis
+    const scale = (slider/50);             // 0.02..2.0
     const onThresh  = baseOn  * scale;
     const offThresh = baseOff * scale;
 
+    // debounce / hysteresis
     const TALK_ON_FRAMES  = 5;   // ~80–90ms
     const TALK_OFF_FRAMES = 12;  // ~190–210ms
 
@@ -216,9 +93,9 @@
     rafId = requestAnimationFrame(loop);
   }
 
-  el.btn.addEventListener('click', async () => {
+  btn.addEventListener('click', async () => {
     try{
-      // Chrome needs video:true for the picker to show “Chrome Tab / Share tab audio”
+      // IMPORTANT: Chrome requires video:true for the picker to show “Chrome Tab / Share tab audio”
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
 
       // We don't need the video track; stop it to save CPU
@@ -234,18 +111,11 @@
       if(rafId) cancelAnimationFrame(rafId);
       loop();
 
-      el.btn.textContent = 'Listening to tab…';
-      el.btn.disabled = true;
+      btn.textContent = 'Listening to tab…';
+      btn.disabled = true;
     }catch(err){
       alert('Could not capture tab audio. In the picker, choose "Chrome Tab", select the tab, and check "Share tab audio." Then press Share.');
       console.error(err);
-    }
-  });
-
-  // Resume autoplay if tab was backgrounded
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) {
-      [el.idle, el.hair, el.fire, el.talk].forEach(v => { if (v.paused) v.play().catch(()=>{}); });
     }
   });
 })();
