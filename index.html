@@ -116,8 +116,9 @@ const CFG = {
   warmup_ms: 10000,
   minGap_ms: 25000,
   talkCooldown_ms: 15000,
+  idle02Window_ms: 30000,   // ← NEW: micro-expression window after talk
   poll_ms: 2000,
-  guard_ms: 300,
+
   idle02: () => rand(20000,35000),
   hair:  () => 120000 + rand(-15000,15000),
   fire:  () => rand(240000,300000),
@@ -176,11 +177,6 @@ function playOnce(name){
   v.play().catch(()=>{});
 }
 
-function playSpecial(name){
-  if(mode!=='idle') return;
-  playOnce(name);
-}
-
 function canSpecial(){
   const now=performance.now();
   return mode==='idle'
@@ -190,15 +186,22 @@ function canSpecial(){
     && !current;
 }
 
+function canIdle02(){
+  const now=performance.now();
+  return canSpecial()
+    && lastTalk>0
+    && now-lastTalk < (CFG.talkCooldown_ms + CFG.idle02Window_ms);
+}
+
 setInterval(()=>{
-  if(!canSpecial()) return;
   const n=performance.now();
-  if(n>=next.apple) return playSpecial('apple');
-  if(n>=next.dance) return playSpecial('dance');
-  if(n>=next.silly) return playSpecial('silly');
-  if(n>=next.hair)  return playSpecial('hair');
-  if(n>=next.fire)  return playSpecial('fire');
-  if(n>=next.idle02)return playOnce('idle02');
+  if(canIdle02() && n>=next.idle02) return playOnce('idle02');
+  if(!canSpecial()) return;
+  if(n>=next.apple) return playOnce('apple');
+  if(n>=next.dance) return playOnce('dance');
+  if(n>=next.silly) return playOnce('silly');
+  if(n>=next.hair)  return playOnce('hair');
+  if(n>=next.fire)  return playOnce('fire');
 },CFG.poll_ms);
 
 showIdle();
