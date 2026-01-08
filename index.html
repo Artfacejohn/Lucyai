@@ -65,6 +65,7 @@ label{font-size:12px;opacity:.85}
 
   <!-- Base -->
   <video id="idleBase" src="idle.mp4" muted playsinline loop preload="auto"></video>
+  <video id="idle02" src="idle02.mp4" muted playsinline preload="auto" hidden></video>
   <video id="talk" src="talk.mp4" muted playsinline loop preload="auto" hidden style="z-index:5"></video>
 
   <!-- Specials -->
@@ -94,6 +95,7 @@ Chromebook mode • Files must be in same folder • Capture tab audio if availa
 
 const el = {
   idle:  document.getElementById('idleBase'),
+  idle02:document.getElementById('idle02'),
   talk:  document.getElementById('talk'),
   hair:  document.getElementById('idleHair'),
   fire:  document.getElementById('idleFire'),
@@ -113,8 +115,10 @@ Object.values(el).forEach(v=>{
 const CFG = {
   warmup_ms: 10000,
   minGap_ms: 25000,
+  talkCooldown_ms: 15000,
   poll_ms: 2000,
   guard_ms: 300,
+  idle02: () => rand(20000,35000),
   hair:  () => 120000 + rand(-15000,15000),
   fire:  () => rand(240000,300000),
   dance: () => rand(150000,210000),
@@ -124,62 +128,57 @@ const CFG = {
 
 function rand(a,b){return Math.floor(Math.random()*(b-a+1))+a}
 
-let mode = 'idle';
-let current = null;
-let started = performance.now();
-let lastSpecial = started;
+let mode='idle';
+let current=null;
+let started=performance.now();
+let lastSpecial=started;
+let lastTalk=0;
 
-let next = {
-  hair:  started + CFG.hair(),
-  fire:  started + CFG.fire(),
-  dance: started + CFG.dance(),
-  silly: started + CFG.silly(),
-  apple: started + CFG.apple()
+let next={
+  idle02: started + CFG.idle02(),
+  hair:   started + CFG.hair(),
+  fire:   started + CFG.fire(),
+  dance:  started + CFG.dance(),
+  silly:  started + CFG.silly(),
+  apple:  started + CFG.apple()
 };
 
 function status(t){el.status.textContent=t}
 
+function hideAll(){
+  Object.values(el).forEach(v=>{
+    if(v instanceof HTMLVideoElement) v.hidden=true;
+  });
+}
+
 function showIdle(){
   current=null;
-  Object.keys(el).forEach(k=>{
-    if(el[k] instanceof HTMLVideoElement) el[k].hidden=true;
-  });
+  hideAll();
   el.idle.hidden=false;
   el.idle.play().catch(()=>{});
   status('Idle');
 }
 
-function playSpecial(name){
-  const v = el[name];
+function playOnce(name){
+  const v=el[name];
   if(!v) return;
-
-  Object.keys(el).forEach(k=>{
-    if(el[k] instanceof HTMLVideoElement) el[k].hidden=true;
-  });
-
+  hideAll();
   v.currentTime=0;
   v.loop=false;
   v.hidden=false;
   current=name;
-  status('Special: '+name);
-
-  const guard=setTimeout(()=>{
-    if(v.readyState<2){
-      v.hidden=true;
-      showIdle();
-    }
-  },CFG.guard_ms);
-
+  status('Idle: '+name);
   v.onended=()=>{
-    clearTimeout(guard);
     lastSpecial=performance.now();
     next[name]=lastSpecial+CFG[name]();
-    v.hidden=true;
-    current=null;
     showIdle();
   };
-
   v.play().catch(()=>{});
+}
+
+function playSpecial(name){
+  if(mode!=='idle') return;
+  playOnce(name);
 }
 
 function canSpecial(){
@@ -187,6 +186,7 @@ function canSpecial(){
   return mode==='idle'
     && now-started>CFG.warmup_ms
     && now-lastSpecial>CFG.minGap_ms
+    && now-lastTalk>CFG.talkCooldown_ms
     && !current;
 }
 
@@ -198,6 +198,7 @@ setInterval(()=>{
   if(n>=next.silly) return playSpecial('silly');
   if(n>=next.hair)  return playSpecial('hair');
   if(n>=next.fire)  return playSpecial('fire');
+  if(n>=next.idle02)return playOnce('idle02');
 },CFG.poll_ms);
 
 showIdle();
@@ -218,8 +219,8 @@ function setMode(m){
   if(mode===m) return;
   mode=m;
   if(m==='talk'){
-    showIdle();
-    el.idle.hidden=true;
+    lastTalk=performance.now();
+    hideAll();
     el.talk.hidden=false;
     el.talk.play().catch(()=>{});
     status('Talk');
@@ -227,14 +228,24 @@ function setMode(m){
 }
 
 function loop(){
-  if(manual){ setMode('talk'); }
+  if(manual){
+    setMode('talk');
+    lastTalk=performance.now();
+  }
   else if(analyser){
     analyser.getFloatTimeDomainData(data);
     const lvl=rms(data);
     const s=el.sens.value/50;
     const onT=0.02*s, offT=0.012*s;
-    if(lvl>onT){on++;off=0;if(on>5)setMode('talk')}
-    else if(lvl<offT){off++;on=0;if(off>12)setMode('idle')}
+    if(lvl>onT){
+      on++; off=0;
+      if(on>5) setMode('talk');
+      lastTalk=performance.now();
+    }
+    else if(lvl<offT){
+      off++; on=0;
+      if(off>12) setMode('idle');
+    }
   }
   raf=requestAnimationFrame(loop);
 }
