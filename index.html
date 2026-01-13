@@ -69,15 +69,15 @@ label{font-size:12px;opacity:.85}
   <video id="talk" src="talk.mp4" muted playsinline loop preload="auto" hidden style="z-index:5"></video>
 
   <!-- Specials -->
-  <video id="idleHair"   src="idlehair.mp4"   muted playsinline preload="auto" hidden></video>
-  <video id="idleFire"   src="idlefire.mp4"   muted playsinline preload="auto" hidden></video>
-  <video id="idleDance"  src="dance.mp4"      muted playsinline preload="auto" hidden></video>
-  <video id="idleSilly"  src="silly.mp4"      muted playsinline preload="auto" hidden></video>
-  <video id="idleApple"  src="apple.mp4"      muted playsinline preload="auto" hidden></video>
+  <video id="idleHair"  src="idlehair.mp4"  muted playsinline preload="auto" hidden></video>
+  <video id="idleFire"  src="idlefire.mp4"  muted playsinline preload="auto" hidden></video>
+  <video id="idleDance" src="dance.mp4"     muted playsinline preload="auto" hidden></video>
+  <video id="idleSilly" src="silly.mp4"     muted playsinline preload="auto" hidden></video>
+  <video id="idleApple" src="apple.mp4"     muted playsinline preload="auto" hidden></video>
 
   <!-- NEW -->
   <video id="idleSilly02" src="SillyFace02.mp4" muted playsinline preload="auto" hidden></video>
-  <video id="wave"        src="LucyWAV.mp4"     muted playsinline preload="auto" hidden></video>
+  <video id="wave" src="LucyWAV.mp4" muted playsinline preload="auto" hidden></video>
 
 </div>
 
@@ -130,8 +130,9 @@ const CFG = {
   fire:   () => rand(240000,300000),
   dance:  () => rand(150000,210000),
   silly:  () => rand(300000,480000),
-  silly2: () => rand(840000,1020000), // ~15 min randomized
-  apple:  () => rand(1800000,2400000)
+  silly2: () => rand(840000,1020000), // ~15 min
+  apple:  () => rand(1800000,2400000),
+  wave:   () => 0 // manual only, but REQUIRED
 };
 
 function rand(a,b){return Math.floor(Math.random()*(b-a+1))+a}
@@ -149,7 +150,8 @@ let next={
   dance:  started + CFG.dance(),
   silly:  started + CFG.silly(),
   silly2: started + CFG.silly2(),
-  apple:  started + CFG.apple()
+  apple:  started + CFG.apple(),
+  wave:   0
 };
 
 function status(t){el.status.textContent=t}
@@ -178,8 +180,10 @@ function playOnce(name){
   current=name;
   status('Idle: '+name);
   v.onended=()=>{
-    lastSpecial=performance.now();
-    next[name]=lastSpecial+CFG[name]();
+    if(name!=='wave'){ // wave should not affect special cadence
+      lastSpecial=performance.now();
+      next[name]=lastSpecial+CFG[name]();
+    }
     showIdle();
   };
   v.play().catch(()=>{});
@@ -290,7 +294,7 @@ el.manual.onclick=()=>{
   setMode(manual?'talk':'idle');
 };
 
-/* Keyboard Wave (W key) */
+/* Keyboard Wave */
 
 window.addEventListener('keydown',e=>{
   if(e.key.toLowerCase()!=='w') return;
